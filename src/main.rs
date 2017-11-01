@@ -234,14 +234,19 @@ fn main() {
                         None => return None,
                         Some(pwcmd) => pwcmd,
                     };
-
-                    let password = match Command::new("sh").arg("-c").arg(pwcmd).output() {
-                        Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
-                        Err(e) => {
-                            println!("Failed to launch password command for {}: {}", name, e);
-                            return None;
-                        }
-                    };
+                    let password = Command::new("sh")
+                        .arg("-c")
+                        .arg(pwcmd)
+                        .output()
+                        .map(|output| {
+                            if !output.status.success() {
+                                panic!("Command failed: {}", pwcmd)
+                            }
+                            let s = String::from_utf8(output.stdout).expect("Password is not utf-8");
+                            s.trim_right_matches('\n').to_owned()
+                        })
+                        .map_err(|e| panic!("Failed to launch password command for {}: {}", name, e))
+                        .unwrap();
 
                     Some(Account {
                         name: name.as_str().to_owned(),
