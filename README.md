@@ -43,6 +43,8 @@ arrive for an account. The options for an account are as follows:
  - `server`: The address to connect to. MUST currently be SSL/TLS
    enabled.
  - `port`: The port to connect to.
+ - `sni_domain`: Domain override for TLS Server Name Indication. If not present, it's the same as `server`.
+ - `server_cert`: Absolute path to server certificate. Optional.
  - `username`: Username for authentication.
  - `pwcmd`: Command to execute to get password for authentication.
 

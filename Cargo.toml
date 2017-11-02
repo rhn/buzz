@@ -1,11 +1,12 @@
 [package]
 name = "buzz"
-version = "1.0.5"
+version = "1.0.6"
 
 description = "A simple system tray application for notifying about unseen e-mail"
 readme = "README.md"
 
-authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
+authors = ["Jon Gjengset <jon@thesquareplanet.com>",
+           "rhn <gihu.rhn@porcupinefactory.org>"]
 
 homepage = "https://github.com/jonhoo/buzz"
 repository = "https://github.com/jonhoo/buzz.git"
@@ -27,3 +28,4 @@ toml = "0.4.2"
 xdg = "2.1.0"
 notify-rust = "3.4.0"
 rayon = "0.8.2"
+openssl = "0.9"

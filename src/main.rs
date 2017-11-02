@@ -6,8 +6,12 @@ extern crate rayon;
 extern crate systray;
 extern crate toml;
 extern crate xdg;
+extern crate openssl;
 
-use native_tls::{TlsConnector, TlsStream};
+use native_tls::{TlsConnector, TlsConnectorBuilder, TlsStream};
+use native_tls::backend::openssl::TlsConnectorBuilderExt;
+use openssl::ssl;
+use openssl::x509::X509;
 use imap::client::Client;
 use rayon::prelude::*;
 
@@ -23,33 +27,45 @@ use std::thread;
 struct Account {
     name: String,
     server: (String, u16),
+    sni_domain: String,
+    server_cert_data: Option<Vec<u8>>,
     username: String,
-    password: String,
-}
-
-impl Account {
-    pub fn connect(&self) -> Result<Connection<TlsStream<TcpStream>>, imap::error::Error> {
-        let tls = TlsConnector::builder()?.build()?;
-        Client::secure_connect((&*self.server.0, self.server.1), &self.server.0, tls).and_then(
-            |mut c| {
-                try!(c.login(&self.username, &self.password));
-                let cap = try!(c.capability());
-                if !cap.iter().any(|c| c == "IDLE") {
-                    return Err(imap::error::Error::BadResponse(cap));
-                }
-                try!(c.select("INBOX"));
-                Ok(Connection {
-                    account: self.clone(),
-                    socket: c,
-                })
-            },
-        )
-    }
+    password: String, // TODO: this should not stay in memory
 }
 
 struct Connection<T: Read + Write> {
     account: Account,
     socket: Client<T>,
+}
+
+impl Account {
+    pub fn connect(&self) -> Result<Connection<TlsStream<TcpStream>>, imap::error::Error> {
+        let tls = match self.server_cert_data {
+            Some(ref pem_data) => {
+                let cert = X509::from_pem(pem_data).unwrap();
+                let mut ssl_cb = ssl::SslConnectorBuilder::new(ssl::SslMethod::tls()).unwrap();
+                // the certificate needs to be injected directly into the store, there's no API for loading in-memory certs
+                ssl_cb.builder_mut().cert_store_mut().add_cert(cert).expect("Failed to add cert");
+                TlsConnectorBuilder::from_openssl(ssl_cb)
+            }
+            None => TlsConnector::builder()?
+        }.build()?;
+        let mut conn = Client::connect((&*self.server.0, self.server.1))?;
+        if !conn.capability()?.iter().any(|c| c == "STARTTLS") {
+            panic!("STARTTLS not in capabilities");
+        }
+        let mut conn = conn.secure(&self.sni_domain, tls).unwrap();
+        conn.login(&self.username, &self.password)?;
+        if !conn.capability()?.iter().any(|c| c == "IDLE") {
+            panic!("IDLE not in capabilities");
+        }
+
+        try!(conn.select("INBOX"));
+        Ok(Connection {
+            account: self.clone(),
+            socket: conn,
+        })
+    }
 }
 
 impl<T: Read + Write + imap::client::SetReadTimeout> Connection<T> {
@@ -248,12 +264,30 @@ fn main() {
                         .map_err(|e| panic!("Failed to launch password command for {}: {}", name, e))
                         .unwrap();
 
+                    let pem_data = t.get("server_cert")
+                        .map(|v| v.as_str().expect("Server cert must be a string"))
+                        .map(|path| {
+                            let mut f = File::open(path).expect(&format!("Could not open {}", path));
+                            let mut pem = Vec::new();
+                            f.read_to_end(&mut pem).expect(&format!("Failed to read {}", path));
+                            pem
+                        });
+                    if let &Some(ref p) = &pem_data {
+                        X509::from_pem(p).expect(&format!("Cert in {} is not PEM", name)); // X509 is not Send, and therefore can't be used later on while connecting
+                    }
+
+                    let server_name = t["server"].as_str().unwrap();
                     Some(Account {
                         name: name.as_str().to_owned(),
                         server: (
-                            t["server"].as_str().unwrap().to_owned(),
+                            server_name.to_owned(),
                             t["port"].as_integer().unwrap() as u16,
                         ),
+                        sni_domain: match t.get("sni_domain") {
+                            Some(data) => data.as_str().unwrap().to_owned(),
+                            None => server_name.to_owned(),
+                        },
+                        server_cert_data: pem_data,
                         username: t["username"].as_str().unwrap().to_owned(),
                         password: password,
                     })
